@@ -44,7 +44,6 @@ print valid_size, valid_text[:64]
 
 n_gram_size=2
 
-''' Data preparation helpers '''
 def build_n_gram_dataset(text, n_gram_size):
   index = 0
   dictionary = dict()
@@ -83,6 +82,9 @@ def prob_to_n_gram(probability):
 
 def probs_2_n_gram_ids(probabilities):
   return [np.argmax(probability) for probability in probabilities]
+  
+def probs_to_ids(probabilities):
+  return [c for c in np.argmax(probabilities, 1)]
 
 def probabilities_to_n_grams(probabilities):
   return [prob_to_n_gram(x) for x in probabilities]
@@ -165,26 +167,31 @@ def batches2string(batches):
 train_batches = BatchGenerator(train_text, batch_size, num_unrollings, n_gram_size)
 valid_batches = BatchGenerator(valid_text, 1, 1, 2)
 
+"""
 print batches2string(train_batches.next())
 print batches2string(train_batches.next())
 print batches2string(valid_batches.next())
 print batches2string(valid_batches.next())
+"""
 
 num_nodes = 64
-embedding_size = 64
+embedding_size = 64	
+num_steps = 24001
 
 graph = tf.Graph()
 with graph.as_default():
   
   # Parameters:
   # Variables saving state across unrollings.
-  saved_output = tf.Variable(tf.zeros([batch_size, num_nodes]), trainable=False)
-  saved_state = tf.Variable(tf.zeros([batch_size, num_nodes]), trainable=False)
+  saved_output1 = tf.Variable(tf.zeros([batch_size, num_nodes]), trainable=False)
+  saved_state1 = tf.Variable(tf.zeros([batch_size, num_nodes]), trainable=False)
+  
+  saved_output2 = tf.Variable(tf.zeros([batch_size, num_nodes]), trainable=False)
+  saved_state2 = tf.Variable(tf.zeros([batch_size, num_nodes]), trainable=False)
   # Classifier weights and biases.
   w = tf.Variable(tf.truncated_normal([num_nodes, vocabulary_size], -0.1, 0.1))
   b = tf.Variable(tf.zeros([vocabulary_size]))
-  
-  
+    
   # Defining matrices for: input gate, forget gate, memory cell, output gate
   m_rows = 4
   m_input_index = 0
@@ -202,12 +209,16 @@ with graph.as_default():
     tf.random_uniform([vocabulary_size, embedding_size], -1.0, 1.0))
   # Dropout
   keep_prob = tf.placeholder(tf.float32) 
+
+  # Definition of the 2nd LSTM layer
+  m_input_w2 = tf.Variable(tf.truncated_normal([m_rows, embedding_size, num_nodes], -0.1, 0.1))
+  m_middle_w2 = tf.Variable(tf.truncated_normal([m_rows, num_nodes, num_nodes], -0.1, 0.1))
+  m_biases2 = tf.Variable(tf.truncated_normal([m_rows, 1, num_nodes], -0.1, 0.1))
+  m_saved_output2 = tf.Variable(tf.zeros([m_rows, batch_size, num_nodes]), trainable=False)
+  m_input2 = tf.Variable(tf.zeros([m_rows, batch_size, num_nodes]), trainable=False)
   
   # Definition of the cell computation.
   def lstm_cell_improved(i, o, state):
-    """Create a LSTM cell. See e.g.: http://arxiv.org/pdf/1402.1128v1.pdf
-    Note that in this formulation, we omit the various connections between the
-    previous state and the gates."""    
     m_input = tf.pack([i for _ in range(m_rows)])
     m_saved_output = tf.pack([o for _ in range(m_rows)])
     
@@ -223,6 +234,24 @@ with graph.as_default():
     
     return output_gate * tf.tanh(state), state
   
+  def lstm_cell_2(i, o, state):
+    """Create a LSTM cell. See e.g.: http://arxiv.org/pdf/1402.1128v1.pdf
+    Note that in this formulation, we omit the various connections between the
+    previous state and the gates."""    
+    m_input2 = tf.pack([i for _ in range(m_rows)])
+    m_saved_output2 = tf.pack([o for _ in range(m_rows)])
+    
+    m_input2 = tf.nn.dropout(m_input2, keep_prob)
+    m_all = tf.batch_matmul(m_input2, m_input_w2) + tf.batch_matmul(m_saved_output2, m_middle_w2) + m_biases
+    m_all = tf.unpack(m_all)
+    
+    input_gate = tf.sigmoid(m_all[m_input_index])
+    forget_gate = tf.sigmoid(m_all[m_forget_index])
+    update = m_all[m_update_index]
+    state = forget_gate * state + input_gate * tf.tanh(update)
+    output_gate = tf.sigmoid(m_all[m_output_index])
+    
+    return output_gate * tf.tanh(state), state
   
   # Input data.
   train_data = list()
@@ -243,15 +272,20 @@ with graph.as_default():
 
   # Unrolled LSTM loop.
   outputs = list()
-  output = saved_output
-  state = saved_state
+  output1 = saved_output1
+  output2 = saved_output2
+  state1 = saved_state1
+  state2 = saved_state2
   for i in train_inputs:
-    output, state = lstm_cell_improved(i, output, state)
-    outputs.append(output)
-  
+    output1, state1 = lstm_cell_improved(i, output1, state1)
+    output2, state2 = lstm_cell_2(output1, output2, state2)
+    outputs.append(output2)
+
   # State saving across unrollings.
-  with tf.control_dependencies([saved_output.assign(output),
-                                saved_state.assign(state)]):
+  with tf.control_dependencies([saved_output1.assign(output1),
+                                saved_state1.assign(state1),
+                                saved_output2.assign(output2),
+                                saved_state2.assign(state2)]):
     # Classifier.
     logits = tf.nn.xw_plus_b(tf.concat(0, outputs), w, b)
     loss = tf.reduce_mean(
@@ -261,7 +295,7 @@ with graph.as_default():
   # Optimizer.
   global_step = tf.Variable(0)
   learning_rate = tf.train.exponential_decay(
-    10.0, global_step, 5000, 0.1, staircase=True)
+    10.0, global_step, num_steps / 2, 0.1, staircase=False)
   optimizer = tf.train.GradientDescentOptimizer(learning_rate)
   gradients, v = zip(*optimizer.compute_gradients(loss))
   gradients, _ = tf.clip_by_global_norm(gradients, 1.25)
@@ -274,18 +308,25 @@ with graph.as_default():
   # Sampling and validation eval: batch 1, no unrolling.
   sample_input = tf.placeholder(tf.int32, shape=[1])
   sample_embed = tf.nn.embedding_lookup(embeddings, sample_input)
-  saved_sample_output = tf.Variable(tf.zeros([1, num_nodes]))
-  saved_sample_state = tf.Variable(tf.zeros([1, num_nodes]))
+  saved_sample_output1 = tf.Variable(tf.zeros([1, num_nodes]))
+  saved_sample_state1 = tf.Variable(tf.zeros([1, num_nodes]))
+  saved_sample_output2 = tf.Variable(tf.zeros([1, num_nodes]))
+  saved_sample_state2 = tf.Variable(tf.zeros([1, num_nodes]))
   reset_sample_state = tf.group(
-    saved_sample_output.assign(tf.zeros([1, num_nodes])),
-    saved_sample_state.assign(tf.zeros([1, num_nodes])))
-  sample_output, sample_state = lstm_cell_improved(
-    sample_embed, saved_sample_output, saved_sample_state)
-  with tf.control_dependencies([saved_sample_output.assign(sample_output),
-                                saved_sample_state.assign(sample_state)]):
-    sample_prediction = tf.nn.softmax(tf.nn.xw_plus_b(sample_output, w, b))
+    saved_sample_output1.assign(tf.zeros([1, num_nodes])),
+    saved_sample_state1.assign(tf.zeros([1, num_nodes])),
+    saved_sample_output2.assign(tf.zeros([1, num_nodes])),
+    saved_sample_state2.assign(tf.zeros([1, num_nodes])))
+  sample_output1, sample_state1 = lstm_cell_improved(
+    sample_embed, saved_sample_output1, saved_sample_state1)
+  sample_output2, sample_state2 = lstm_cell_2(
+    sample_output1, saved_sample_output2, saved_sample_state2)
+  with tf.control_dependencies([saved_sample_output1.assign(sample_output1),
+                                saved_sample_state1.assign(sample_state1),
+                                saved_sample_output2.assign(sample_output2),
+                                saved_sample_state2.assign(sample_state2)]):
+    sample_prediction = tf.nn.softmax(tf.nn.xw_plus_b(sample_output2, w, b))
 	
-num_steps = 24001
 summary_frequency = 100
 
 with tf.Session(graph=graph) as session:
