@@ -49,7 +49,7 @@ Nearest to more: less, rather, larger, smaller, fewer, very, worse, better,
 
 "anarchism originated X a term" most likely fit: ['in', 'as', 'for', 'and', 'to', 'that', 'with', 'of']
 ```
-As you can see the model starts associate that there's a correlation between `time` and `distance`, also `as` is the second best prediction for the missing word in the middle of the `"anarchism originated X a term` sentence.
+As you can see the model starts associate that there's a correlation between `time` and `distance`, also `as` is the second best prediction for the missing word in the middle of the `anarchism originated X a term` sentence.
 
 ## Requirements
     python 2.7
