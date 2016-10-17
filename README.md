@@ -9,7 +9,10 @@ The LSTMs are customly built for practice purposes. You can use the ones built-i
 
 ## Possible tunings
 
-Currently we use a relatively shallow NN (only two layers) and 10 unrollings. Adding more layers might be interesting, as well as introducing dropouts to allowe more epochs.
+Currently we use a relatively shallow NN (only two layers) and 10 unrollings. 
+Adding more layers might be interesting, as well as introducing dropouts to allowe more epochs.
+Also experimenting with feeding of whole words is interesting.
+Playing with the temperature for sampling might be interesting, so users can adjust the conservativeness of predictions (more similar to the text) but reduce word diversity.
 
 ## Results
 
