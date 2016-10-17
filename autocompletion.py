@@ -74,6 +74,37 @@ def n_gram_to_encoding(n_gram):
   
   return encoding
 
+def probs_to_ids(probabilities):
+  return [c for c in np.argmax(probabilities, 1)]
+
+def logprob(predictions, labels):
+  """Log-probability of the true labels in a predicted batch."""
+  predictions[predictions < 1e-10] = 1e-10
+  return np.sum(np.multiply(labels, -np.log(predictions))) / labels.shape[0]
+
+def sample(prediction, bottom_start=0):
+  """Turn a (column) prediction into 1-hot encoded samples."""
+  p = np.zeros(shape=[vocabulary_size], dtype=np.float)
+  p[sample_distribution(prediction[0], bottom_start)] = 1.0
+  return p
+
+def sample_distribution(distribution, bottom_start=0):
+  """Sample one element from a distribution assumed to be an array of normalized
+  probabilities.
+  """
+  r = random.uniform(0, 1)
+  s = 0
+  for i in xrange(len(distribution)):
+    s += distribution[i]
+    if s >= r:
+      return i
+  return len(distribution) - 1
+
+def random_distribution():
+  """Generate a random column of probabilities."""
+  b = np.random.uniform(0.0, 1.0, size=[1, vocabulary_size])
+  return b/np.sum(b, 1)[:,None]
+
 def prob_to_n_gram(probability):
   ngram_id = np.argmax(probability)
   ngram = reverse_dictionary[ngram_id]
@@ -82,9 +113,6 @@ def prob_to_n_gram(probability):
 
 def probs_2_n_gram_ids(probabilities):
   return [np.argmax(probability) for probability in probabilities]
-  
-def probs_to_ids(probabilities):
-  return [c for c in np.argmax(probabilities, 1)]
 
 def probabilities_to_n_grams(probabilities):
   return [prob_to_n_gram(x) for x in probabilities]
